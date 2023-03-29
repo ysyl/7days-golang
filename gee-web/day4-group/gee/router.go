@@ -14,10 +14,10 @@ func (r Router) AddRouter(method, path string, handler HandlerFunc) {
 	})
 }
 
-func (r Router) Search(method, path string) (HandlerFunc, bool) {
+func (r Router) Search(method, path string) (HandlerFunc, error) {
 	handler, err := r.trie.Search(method, path)
 	if err != nil {
-		return handler, false
+		return handler, err
 	}
-	return handler, true
+	return handler, nil
 }

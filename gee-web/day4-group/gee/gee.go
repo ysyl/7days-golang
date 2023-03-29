@@ -31,12 +31,12 @@ func New() *Engine {
 
 func (engine *Engine) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	method, path := request.Method, request.URL.Path
-	handlerFunc, ok := engine.routers.Search(method, path)
-	if ok {
+	handlerFunc, err := engine.routers.Search(method, path)
+	if err == nil {
 		ctx := NewContext(writer, request)
 		handlerFunc(ctx)
 	} else {
-		fmt.Fprintf(writer, "404 not fount")
+		fmt.Fprintf(writer, err.Error())
 	}
 }
 

@@ -72,6 +72,9 @@ func (n *node) Search(method string, path []string, ctx *Context) (HandlerFunc, 
 
 func (n *node) recurSearch(method string, pathList []string, ctx *Context) (*node, error) {
 	if len(pathList) == 0 {
+		if (*n.options)["Method"] != method {
+			return nil, errors.New("405, method is not supported")
+		}
 		return n, nil
 	}
 	if strings.HasPrefix(pathList[0], "*") {
@@ -79,9 +82,6 @@ func (n *node) recurSearch(method string, pathList []string, ctx *Context) (*nod
 
 	child, ok := n.childs[pathList[0]]
 	// 判断方法
-	if ok && (*child.options)["Method"] != method {
-		return nil, errors.New("405, method is not supported")
-	}
 	// 找不到匹配参数，寻找参数化路径
 	if ok {
 		return child.recurSearch(method, pathList[1:], ctx)
@@ -103,5 +103,5 @@ func (n *node) recurSearch(method string, pathList []string, ctx *Context) (*nod
 			return child, nil
 		}
 	}
-	return nil, errors.New("error")
+	return nil, errors.New("error: node not found")
 }
