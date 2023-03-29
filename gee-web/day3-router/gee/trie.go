@@ -1,81 +1,89 @@
 package gee
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 )
 
+type Trie struct {
+	root *node
+}
+
+func NewTrie() *Trie {
+	return &Trie{root: &node{childs: make(map[string]*node)}}
+}
+
+func (t Trie) Insert(path string, handler HandlerFunc, options *Options) {
+	t.root.insert(strings.Split(path, "/")[1:], handler, options)
+}
+
+func (t Trie) Search(method string, path string) (HandlerFunc, error) {
+	return t.root.Search(method, strings.Split(path, "/")[1:])
+}
+
+type Options map[string]string
+
 type node struct {
-	pattern  string
-	part     string
-	children []*node
-	isWild   bool
+	path    string
+	handler HandlerFunc
+	options *Options
+	childs  map[string]*node
 }
 
-func (n *node) String() string {
-	return fmt.Sprintf("node{pattern=%s, part=%s, isWild=%t}", n.pattern, n.part, n.isWild)
+func newNode(param string, handler HandlerFunc, options *Options) *node {
+	return &node{path: param, handler: handler, childs: make(map[string]*node), options: options}
 }
 
-func (n *node) insert(pattern string, parts []string, height int) {
-	if len(parts) == height {
-		n.pattern = pattern
+func (n *node) insert(part []string, handler HandlerFunc, options *Options) {
+	if len(part) == 0 {
 		return
 	}
 
-	part := parts[height]
-	child := n.matchChild(part)
-	if child == nil {
-		child = &node{part: part, isWild: part[0] == ':' || part[0] == '*'}
-		n.children = append(n.children, child)
+	child, ok := n.childs[part[0]]
+	if !ok {
+		child = newNode(part[0], handler, options)
+		n.childs[part[0]] = child
 	}
-	child.insert(pattern, parts, height+1)
+	child.insert(part[1:], handler, options)
+	return
 }
 
-func (n *node) search(parts []string, height int) *node {
-	if len(parts) == height || strings.HasPrefix(n.part, "*") {
-		if n.pattern == "" {
-			return nil
-		}
-		return n
+func (n *node) Search(method string, path []string) (HandlerFunc, error) {
+	ctx := Context{Params: make(map[string]string)}
+	resultNode, err := n.recurSearch(method, path, &ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	part := parts[height]
-	children := n.matchChildren(part)
-
-	for _, child := range children {
-		result := child.search(parts, height+1)
-		if result != nil {
-			return result
-		}
+	handler := func(c *Context) {
+		c.Params = ctx.Params
+		resultNode.handler(c)
 	}
 
-	return nil
+	return handler, nil
 }
 
-func (n *node) travel(list *([]*node)) {
-	if n.pattern != "" {
-		*list = append(*list, n)
+func (n *node) recurSearch(method string, path []string, ctx *Context) (*node, error) {
+	if len(path) == 0 {
+		return n, nil
 	}
-	for _, child := range n.children {
-		child.travel(list)
+	child, ok := n.childs[path[0]]
+	// 判断方法
+	if ok && (*child.options)["Method"] != method {
+		return nil, errors.New("405, method is not supported")
 	}
-}
-
-func (n *node) matchChild(part string) *node {
-	for _, child := range n.children {
-		if child.part == part || child.isWild {
-			return child
+	// 找不到匹配参数，寻找参数化路径
+	if !ok {
+		for key, child := range n.childs {
+			if strings.HasPrefix(key, ":") {
+				// 提取参数，设置到上下文
+				paramName := strings.Split(key, ":")[1]
+				paramValue := path[0]
+				ctx.Params[paramName] = paramValue
+				return child.recurSearch(method, path[1:], ctx)
+			}
 		}
+		return nil, errors.New("error")
 	}
-	return nil
-}
-
-func (n *node) matchChildren(part string) []*node {
-	nodes := make([]*node, 0)
-	for _, child := range n.children {
-		if child.part == part || child.isWild {
-			nodes = append(nodes, child)
-		}
-	}
-	return nodes
+	return child.recurSearch(method, path[1:], ctx)
 }

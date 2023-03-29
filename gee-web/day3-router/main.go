@@ -1,5 +1,11 @@
 package main
 
+import (
+	"fmt"
+	"gee"
+	"net/http"
+)
+
 /*
 (1)
 $ curl -i http://localhost:9999/
@@ -26,13 +32,11 @@ $ curl "http://localhost:9999/xxx"
 404 NOT FOUND: /xxx
 */
 
-import (
-	"net/http"
-
-	"gee"
-)
-
 func main() {
+	test()
+}
+
+func test() {
 	r := gee.New()
 	r.GET("/", func(c *gee.Context) {
 		c.HTML(http.StatusOK, "<h1>Hello Gee</h1>")
@@ -47,10 +51,11 @@ func main() {
 		// expect /hello/geektutu
 		c.String(http.StatusOK, "hello %s, you're at %s\n", c.Param("name"), c.Path)
 	})
-
-	r.GET("/assets/*filepath", func(c *gee.Context) {
-		c.JSON(http.StatusOK, gee.H{"filepath": c.Param("filepath")})
-	})
+	//
+	//r.GET("/assets/*filepath", func(c *gee.Context) {
+	//    c.JSON(http.StatusOK, gee.H{"filepath": c.Param("filepath")})
+	//})
 
 	r.Run(":9999")
+	fmt.Println("hello end")
 }
