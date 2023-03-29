@@ -43,3 +43,6 @@ func (engine *SimpleEngine) Run(addr string) error {
     err := http.ListenAndServe(addr, engine)
     return err
 }
+
+type GroupEngine struct {
+}

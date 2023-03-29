@@ -1,72 +1,70 @@
 package gee
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 )
 
-// HandlerFunc defines the request handler used by gee
-type HandlerFunc func(*Context)
+type H map[string]any
 
-// Engine implement the interface of ServeHTTP
-type (
-	RouterGroup struct {
-		prefix      string
-		middlewares []HandlerFunc // support middleware
-		parent      *RouterGroup  // support nesting
-		engine      *Engine       // all groups share a Engine instance
-	}
+type HandlerFunc func(ctx *Context)
 
-	Engine struct {
-		*RouterGroup
-		router *router
-		groups []*RouterGroup // store all groups
-	}
-)
+// Engine Engine是统一的门面
+type Engine struct {
+	routers *Router
+}
 
-// New is the constructor of gee.Engine
+// RouterGroup 是分组代理，也有注册方法
+type RouterGroup struct {
+	prefix string
+	engine *Engine
+}
+
+type HttpHandlerRegistry interface {
+	GET(path string, handler HandlerFunc)
+	POST(path string, handler HandlerFunc)
+}
+
 func New() *Engine {
-	engine := &Engine{router: newRouter()}
-	engine.RouterGroup = &RouterGroup{engine: engine}
-	engine.groups = []*RouterGroup{engine.RouterGroup}
-	return engine
+	return &Engine{routers: NewRouter()}
 }
 
-// Group is defined to create a new RouterGroup
-// remember all groups share the same Engine instance
-func (group *RouterGroup) Group(prefix string) *RouterGroup {
-	engine := group.engine
-	newGroup := &RouterGroup{
-		prefix: group.prefix + prefix,
-		parent: group,
-		engine: engine,
+func (engine *Engine) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	method, path := request.Method, request.URL.Path
+	handlerFunc, ok := engine.routers.Search(method, path)
+	if ok {
+		ctx := NewContext(writer, request)
+		handlerFunc(ctx)
+	} else {
+		fmt.Fprintf(writer, "404 not fount")
 	}
-	engine.groups = append(engine.groups, newGroup)
-	return newGroup
 }
 
-func (group *RouterGroup) addRoute(method string, comp string, handler HandlerFunc) {
-	pattern := group.prefix + comp
-	log.Printf("Route %4s - %s", method, pattern)
-	group.engine.router.addRoute(method, pattern, handler)
+func (engine Engine) addRoute(method, path string, handlerFunc HandlerFunc) {
+	engine.routers.AddRouter(method, path, handlerFunc)
 }
 
-// GET defines the method to add GET request
-func (group *RouterGroup) GET(pattern string, handler HandlerFunc) {
-	group.addRoute("GET", pattern, handler)
+func (engine *Engine) GET(path string, handlerFunc HandlerFunc) {
+	engine.addRoute("GET", path, handlerFunc)
 }
 
-// POST defines the method to add POST request
-func (group *RouterGroup) POST(pattern string, handler HandlerFunc) {
-	group.addRoute("POST", pattern, handler)
+func (engine *Engine) POST(path string, handlerFunc HandlerFunc) {
+	engine.addRoute("POST", path, handlerFunc)
 }
 
-// Run defines the method to start a http server
-func (engine *Engine) Run(addr string) (err error) {
-	return http.ListenAndServe(addr, engine)
+func (engine *Engine) Run(addr string) error {
+	err := http.ListenAndServe(addr, engine)
+	return err
 }
 
-func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	c := newContext(w, req)
-	engine.router.handle(c)
+func (engine *Engine) Group(prefix string) *RouterGroup {
+	return &RouterGroup{prefix: prefix, engine: engine}
+}
+
+func (r *RouterGroup) GET(path string, handler HandlerFunc) {
+	r.engine.GET(r.prefix+path, handler)
+}
+
+func (r *RouterGroup) POST(path string, handler HandlerFunc) {
+	r.engine.POST(r.prefix+path, handler)
 }
