@@ -63,27 +63,38 @@ func (n *node) Search(method string, path []string) (HandlerFunc, error) {
 	return handler, nil
 }
 
-func (n *node) recurSearch(method string, path []string, ctx *Context) (*node, error) {
-	if len(path) == 0 {
+func (n *node) recurSearch(method string, pathList []string, ctx *Context) (*node, error) {
+	if len(pathList) == 0 {
 		return n, nil
 	}
-	child, ok := n.childs[path[0]]
+	if strings.HasPrefix(pathList[0], "*") {
+	}
+
+	child, ok := n.childs[pathList[0]]
 	// 判断方法
 	if ok && (*child.options)["Method"] != method {
 		return nil, errors.New("405, method is not supported")
 	}
 	// 找不到匹配参数，寻找参数化路径
 	if !ok {
-		for key, child := range n.childs {
-			if strings.HasPrefix(key, ":") {
+		for path, child := range n.childs {
+			// 存在:匹配参数，然后将参数填进去
+			if strings.HasPrefix(path, ":") {
 				// 提取参数，设置到上下文
-				paramName := strings.Split(key, ":")[1]
-				paramValue := path[0]
+				paramName := strings.Split(path, ":")[1]
+				paramValue := pathList[0]
 				ctx.Params[paramName] = paramValue
-				return child.recurSearch(method, path[1:], ctx)
+				return child.recurSearch(method, pathList[1:], ctx)
+			}
+			// 存在*匹配参数，这时将req对应的后续路径全部塞入参数中
+			if strings.HasPrefix(path, "*") {
+				paramName := strings.Split(path, "*")[1]
+				paramValue := strings.Join(pathList, "/")
+				ctx.Params[paramName] = paramValue
+				return child, nil
 			}
 		}
 		return nil, errors.New("error")
 	}
-	return child.recurSearch(method, path[1:], ctx)
+	return child.recurSearch(method, pathList[1:], ctx)
 }
