@@ -1,44 +1,49 @@
 package gee
 
 import (
-	"log"
-	"net/http"
+    "fmt"
+    "net/http"
 )
 
-// HandlerFunc defines the request handler used by gee
-type HandlerFunc func(*Context)
+type H map[string]any
 
-// Engine implement the interface of ServeHTTP
-type Engine struct {
-	router *router
+type HandlerFunc func(ctx *Context)
+
+type SimpleEngine struct {
+    routers map[string]HandlerFunc
 }
 
-// New is the constructor of gee.Engine
-func New() *Engine {
-	return &Engine{router: newRouter()}
+func New() *SimpleEngine {
+    return &SimpleEngine{routers: map[string]HandlerFunc{}}
 }
 
-func (engine *Engine) addRoute(method string, pattern string, handler HandlerFunc) {
-	log.Printf("Route %4s - %s", method, pattern)
-	engine.router.addRoute(method, pattern, handler)
+func (engine *SimpleEngine) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+    method, path := request.Method, request.URL.Path
+    key := method + "-" + path
+    handlerFunc, ok := engine.routers[key]
+    if ok {
+        ctx := NewContext(writer, request)
+        handlerFunc(ctx)
+    } else {
+        fmt.Fprintf(writer, "404 not fount, "+key)
+    }
 }
 
-// GET defines the method to add GET request
-func (engine *Engine) GET(pattern string, handler HandlerFunc) {
-	engine.addRoute("GET", pattern, handler)
+func (engine SimpleEngine) addRoute(method, path string, handlerFunc HandlerFunc) {
+    key := method + "-" + path
+    fmt.Println(key)
+    engine.routers[key] = handlerFunc
 }
 
-// POST defines the method to add POST request
-func (engine *Engine) POST(pattern string, handler HandlerFunc) {
-	engine.addRoute("POST", pattern, handler)
+func (engine *SimpleEngine) GET(path string, handlerFunc HandlerFunc) {
+    engine.addRoute("GET", path, handlerFunc)
 }
 
-// Run defines the method to start a http server
-func (engine *Engine) Run(addr string) (err error) {
-	return http.ListenAndServe(addr, engine)
+func (engine *SimpleEngine) POST(path string, handlerFunc HandlerFunc) {
+    engine.addRoute("POST", path, handlerFunc)
 }
 
-func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	c := newContext(w, req)
-	engine.router.handle(c)
+func (engine *SimpleEngine) Run(addr string) error {
+    err := http.ListenAndServe(addr, engine)
+    return err
 }
