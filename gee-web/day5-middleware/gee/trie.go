@@ -58,7 +58,7 @@ func (n *node) Search(method string, path []string, ctx *Context) (HandlerFunc, 
 	}
 
 	if resultNode.handler == nil {
-		return nil, errors.New("handler not found")
+		return nil, errors.New("handlers not found")
 	}
 
 	handler := func(c *Context) {

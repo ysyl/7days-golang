@@ -14,13 +14,15 @@ type HandlerFunc func(ctx *Context)
 // Engine Engine是统一的门面
 type Engine struct {
 	routers     *Router
+	groups      []*RouterGroup
 	middlewares []HandlerFunc
 }
 
 // RouterGroup 是分组代理，也有注册方法
 type RouterGroup struct {
-	prefix string
-	engine *Engine
+	prefix      string
+	engine      *Engine
+	middlewares []HandlerFunc
 }
 
 type HttpHandlerRegistry interface {
@@ -35,19 +37,31 @@ func New() *Engine {
 func (engine *Engine) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	method, path := request.Method, request.URL.Path
 	handlerFunc, err := engine.routers.Search(method, path)
-	if err == nil {
-		ctx := NewContext(writer, request)
-		handlerFunc(ctx)
-	} else {
+	if err != nil {
 		fmt.Fprintf(writer, err.Error())
+		return
 	}
+	ctx := NewContext(writer, request)
+	// 处理中间件
+	pushMiddleware(ctx, engine, handlerFunc)
+	// 启动
+	ctx.Next()
+}
+
+func pushMiddleware(ctx *Context, engine *Engine, handlerFunc HandlerFunc) {
+	assembleMiddlewares := make([]HandlerFunc, 0)
+	// 加入组中间件
+	for _, group := range engine.groups {
+		assembleMiddlewares = append(assembleMiddlewares, group.middlewares...)
+	}
+	// 加入global中间件
+	assembleMiddlewares = append(assembleMiddlewares, engine.middlewares...)
+	assembleMiddlewares = append(assembleMiddlewares, handlerFunc)
+	ctx.handlers = assembleMiddlewares
 }
 
 // 注册时，实际注册的handlerFunc要包装middlewares
 func (engine *Engine) addRoute(method, path string, handlerFunc HandlerFunc) {
-	for _, middleware := range engine.middlewares {
-		handlerFunc = middleware.Wrap(handlerFunc)
-	}
 	engine.routers.AddRouter(method, path, handlerFunc)
 }
 
@@ -65,7 +79,9 @@ func (engine *Engine) Run(addr string) error {
 }
 
 func (engine *Engine) Group(prefix string) *RouterGroup {
-	return &RouterGroup{prefix: prefix, engine: engine}
+	r := &RouterGroup{prefix: prefix, engine: engine}
+	engine.groups = append(engine.groups, r)
+	return r
 }
 
 func (r *RouterGroup) GET(path string, handler HandlerFunc) {
@@ -81,22 +97,15 @@ func (engine *Engine) Use(middleware HandlerFunc) {
 }
 
 func (r *RouterGroup) Use(middleware HandlerFunc) {
-	r.engine.middlewares = append([]HandlerFunc{middleware}, r.engine.middlewares...)
+	r.middlewares = append(r.middlewares, middleware)
 }
 
 // 2019/08/17 01:37:38 [200] / in 3.14µs
 func Logger() HandlerFunc {
 	return func(ctx *Context) {
-		duration := ctx.After.Sub(ctx.Before)
+		before := time.Now()
+		ctx.Next()
+		duration := time.Now().Sub(before)
 		log.Default().Printf("[%d] %s in %s", ctx.StatusCode, ctx.Path, duration.String())
-	}
-}
-
-func (h HandlerFunc) Wrap(innerHandler HandlerFunc) HandlerFunc {
-	return func(ctx *Context) {
-		ctx.Before = time.Now()
-		innerHandler(ctx)
-		ctx.After = time.Now()
-		h(ctx)
 	}
 }

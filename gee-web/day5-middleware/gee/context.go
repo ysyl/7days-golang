@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 type Context struct {
@@ -13,8 +12,8 @@ type Context struct {
 	Path       string
 	Params     map[string]string
 	StatusCode HttpStatus
-	Before     time.Time
-	After      time.Time
+	index      int
+	handlers   []HandlerFunc
 }
 
 type HttpStatus int
@@ -31,7 +30,8 @@ var (
 )
 
 func NewContext(writer http.ResponseWriter, r *http.Request) *Context {
-	return &Context{Writer: writer, Req: r, Path: r.URL.Path, StatusCode: SUCCESS}
+	return &Context{Writer: writer, Req: r, Path: r.URL.Path, StatusCode: SUCCESS,
+		index: -1}
 }
 
 func (c *Context) HTML(ok int, s string) {
@@ -68,6 +68,19 @@ func (c *Context) Param(key string) string {
 	return c.Params[key]
 }
 
-func (c *Context) Fail(i int, s string) {
+func (c *Context) Fail(httpStatus int, message string) {
+	// 跳过所有中间件（含接口逻辑），直接返回报错
+	c.index = len(c.handlers)
+	c.StatusCode = HttpStatus(httpStatus)
+	c.JSON(httpStatus, H{
+		"message": message,
+	})
+}
 
+func (c *Context) Next() {
+	c.index++
+	for c.index < len(c.handlers) {
+		c.handlers[c.index](c)
+		c.index++
+	}
 }

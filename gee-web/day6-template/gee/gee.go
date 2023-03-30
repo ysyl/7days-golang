@@ -1,123 +1,116 @@
 package gee
 
 import (
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
-	"path"
-	"strings"
+	"time"
 )
 
-// HandlerFunc defines the request handler used by gee
-type HandlerFunc func(*Context)
+type H map[string]any
 
-// Engine implement the interface of ServeHTTP
-type (
-	RouterGroup struct {
-		prefix      string
-		middlewares []HandlerFunc // support middleware
-		parent      *RouterGroup  // support nesting
-		engine      *Engine       // all groups share a Engine instance
-	}
+type HandlerFunc func(ctx *Context)
 
-	Engine struct {
-		*RouterGroup
-		router        *router
-		groups        []*RouterGroup     // store all groups
-		htmlTemplates *template.Template // for html render
-		funcMap       template.FuncMap   // for html render
-	}
-)
+// Engine Engine是统一的门面
+type Engine struct {
+	routers     *Router
+	middlewares []HandlerFunc
+	funcMap     template.FuncMap
+}
 
-// New is the constructor of gee.Engine
+// RouterGroup 是分组代理，也有注册方法
+type RouterGroup struct {
+	prefix string
+	engine *Engine
+}
+
+type HttpHandlerRegistry interface {
+	GET(path string, handler HandlerFunc)
+	POST(path string, handler HandlerFunc)
+}
+
 func New() *Engine {
-	engine := &Engine{router: newRouter()}
-	engine.RouterGroup = &RouterGroup{engine: engine}
-	engine.groups = []*RouterGroup{engine.RouterGroup}
-	return engine
+	return &Engine{routers: NewRouter()}
 }
 
-// Group is defined to create a new RouterGroup
-// remember all groups share the same Engine instance
-func (group *RouterGroup) Group(prefix string) *RouterGroup {
-	engine := group.engine
-	newGroup := &RouterGroup{
-		prefix: group.prefix + prefix,
-		parent: group,
-		engine: engine,
-	}
-	engine.groups = append(engine.groups, newGroup)
-	return newGroup
-}
-
-// Use is defined to add middleware to the group
-func (group *RouterGroup) Use(middlewares ...HandlerFunc) {
-	group.middlewares = append(group.middlewares, middlewares...)
-}
-
-func (group *RouterGroup) addRoute(method string, comp string, handler HandlerFunc) {
-	pattern := group.prefix + comp
-	log.Printf("Route %4s - %s", method, pattern)
-	group.engine.router.addRoute(method, pattern, handler)
-}
-
-// GET defines the method to add GET request
-func (group *RouterGroup) GET(pattern string, handler HandlerFunc) {
-	group.addRoute("GET", pattern, handler)
-}
-
-// POST defines the method to add POST request
-func (group *RouterGroup) POST(pattern string, handler HandlerFunc) {
-	group.addRoute("POST", pattern, handler)
-}
-
-// create static handler
-func (group *RouterGroup) createStaticHandler(relativePath string, fs http.FileSystem) HandlerFunc {
-	absolutePath := path.Join(group.prefix, relativePath)
-	fileServer := http.StripPrefix(absolutePath, http.FileServer(fs))
-	return func(c *Context) {
-		file := c.Param("filepath")
-		// Check if file exists and/or if we have permission to access it
-		if _, err := fs.Open(file); err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-
-		fileServer.ServeHTTP(c.Writer, c.Req)
+func (engine *Engine) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	method, path := request.Method, request.URL.Path
+	handlerFunc, err := engine.routers.Search(method, path)
+	if err == nil {
+		ctx := NewContext(writer, request)
+		handlerFunc(ctx)
+	} else {
+		fmt.Fprintf(writer, err.Error())
 	}
 }
 
-// serve static files
-func (group *RouterGroup) Static(relativePath string, root string) {
-	handler := group.createStaticHandler(relativePath, http.Dir(root))
-	urlPattern := path.Join(relativePath, "/*filepath")
-	// Register GET handlers
-	group.GET(urlPattern, handler)
+// 注册时，实际注册的handlerFunc要包装middlewares
+func (engine *Engine) addRoute(method, path string, handlerFunc HandlerFunc) {
+	for _, middleware := range engine.middlewares {
+		handlerFunc = middleware.Wrap(handlerFunc)
+	}
+	engine.routers.AddRouter(method, path, handlerFunc)
 }
 
-// for custom render function
+func (engine *Engine) GET(path string, handlerFunc HandlerFunc) {
+	engine.addRoute("GET", path, handlerFunc)
+}
+
+func (engine *Engine) POST(path string, handlerFunc HandlerFunc) {
+	engine.addRoute("POST", path, handlerFunc)
+}
+
+func (engine *Engine) Run(addr string) error {
+	err := http.ListenAndServe(addr, engine)
+	return err
+}
+
+func (engine *Engine) Group(prefix string) *RouterGroup {
+	return &RouterGroup{prefix: prefix, engine: engine}
+}
+
+func (r *RouterGroup) GET(path string, handler HandlerFunc) {
+	r.engine.GET(r.prefix+path, handler)
+}
+
+func (r *RouterGroup) POST(path string, handler HandlerFunc) {
+	r.engine.POST(r.prefix+path, handler)
+}
+
+func (engine *Engine) Use(middleware HandlerFunc) {
+	engine.middlewares = append(engine.middlewares, middleware)
+}
+
 func (engine *Engine) SetFuncMap(funcMap template.FuncMap) {
 	engine.funcMap = funcMap
 }
 
-func (engine *Engine) LoadHTMLGlob(pattern string) {
-	engine.htmlTemplates = template.Must(template.New("").Funcs(engine.funcMap).ParseGlob(pattern))
+func (engine *Engine) LoadHTMLGlob(s string) {
+
 }
 
-// Run defines the method to start a http server
-func (engine *Engine) Run(addr string) (err error) {
-	return http.ListenAndServe(addr, engine)
+func (engine *Engine) Static(s string, s2 string) {
+
 }
 
-func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	var middlewares []HandlerFunc
-	for _, group := range engine.groups {
-		if strings.HasPrefix(req.URL.Path, group.prefix) {
-			middlewares = append(middlewares, group.middlewares...)
-		}
+func (r *RouterGroup) Use(middleware HandlerFunc) {
+	r.engine.middlewares = append([]HandlerFunc{middleware}, r.engine.middlewares...)
+}
+
+// 2019/08/17 01:37:38 [200] / in 3.14µs
+func Logger() HandlerFunc {
+	return func(ctx *Context) {
+		duration := ctx.After.Sub(ctx.Before)
+		log.Default().Printf("[%d] %s in %s", ctx.StatusCode, ctx.Path, duration.String())
 	}
-	c := newContext(w, req)
-	c.handlers = middlewares
-	c.engine = engine
-	engine.router.handle(c)
+}
+
+func (h HandlerFunc) Wrap(innerHandler HandlerFunc) HandlerFunc {
+	return func(ctx *Context) {
+		ctx.Before = time.Now()
+		innerHandler(ctx)
+		ctx.After = time.Now()
+		h(ctx)
+	}
 }
