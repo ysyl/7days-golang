@@ -36,7 +36,7 @@ p {
 import (
 	"fmt"
 	"html/template"
-	"net/http"
+	http "net/http"
 	"time"
 
 	"gee"
