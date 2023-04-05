@@ -162,7 +162,7 @@ func (client *Client) receive() {
 // It returns the Call structure representing the invocation.
 func (client *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
 	if done == nil {
-		done = make(chan *Call, 1)
+		done = make(chan *Call, 10)
 	} else if cap(done) == 0 {
 		log.Panic("rpc client: done channel is unbuffered")
 	}
@@ -173,7 +173,6 @@ func (client *Client) Go(serviceMethod string, args, reply interface{}, done cha
 		Done:          done,
 	}
 	client.send(call)
-	log.Println("after send")
 	return call
 }
 
@@ -210,7 +209,6 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	// send options with server
 	if err := json.NewEncoder(conn).Encode(opt); err != nil {
 		log.Println("rpc client: options error: ", err)
-		_ = conn.Close()
 		return nil, err
 	}
 	return newClientCodec(f(conn), opt), nil
