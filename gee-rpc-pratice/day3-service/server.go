@@ -31,8 +31,10 @@ type Options struct {
 }
 
 type request struct {
-	Header *codec.Header
-	Body   interface{}
+	Header  *codec.Header
+	Body    interface{}
+	Service *Service
+	Method  *methodType
 }
 
 var DefaultOption = Options{
@@ -105,7 +107,7 @@ func (s *Server) serveCodec(c codec.Codec) {
 		}
 		readQueue.Add(1)
 		// 并发处理req，串行发送res
-		go s.handleRequest(c, readRequest.Header, readRequest.Body, readQueue, sendLock)
+		go s.handleRequest(readRequest, c, readRequest.Header, readRequest.Body, readQueue, sendLock)
 	}
 	fmt.Println("end service")
 	readQueue.Wait()
@@ -128,7 +130,8 @@ func (s *Server) readRequest(c codec.Codec) (*request, error) {
 		return nil, err
 	}
 	names := strings.Split(h.ServiceMethod, ".")
-	method, _ := s.LoadMethod(names[0], names[1])
+	service, _ := s.Load(names[0])
+	method := service.LoadMethod(names[1])
 
 	var argv = method.newArgv()
 	argvi := argv.Interface()
@@ -142,25 +145,21 @@ func (s *Server) readRequest(c codec.Codec) (*request, error) {
 	}
 
 	return &request{
-		Header: h,
-		Body:   argv.Interface(),
+		Header:  h,
+		Body:    argv.Interface(),
+		Method:  method,
+		Service: service,
 	}, nil
 }
 
-func (s *Server) handleRequest(c codec.Codec, header *codec.Header, arg interface{}, queue *sync.WaitGroup, lock *sync.Mutex) {
+func (s *Server) handleRequest(request *request, c codec.Codec, header *codec.Header, arg interface{}, queue *sync.WaitGroup, lock *sync.Mutex) {
 	defer queue.Done()
-	// 分割methodname
-	serviceName, methodName, err := extractMethodName(header.ServiceMethod)
-	if err != nil {
-		return
-	}
-	service, _ := s.Load(serviceName)
-	method := service.LoadMethod(methodName)
+	service, method := request.Service, request.Method
 
 	argV := reflect.ValueOf(arg)
 	replyV := method.newReplyv()
 
-	err = service.call(method, argV, replyV)
+	err := service.call(method, argV, replyV)
 	if err != nil {
 		header.Error = err.Error()
 		s.sendResponse(c, header, nil, queue, lock)
