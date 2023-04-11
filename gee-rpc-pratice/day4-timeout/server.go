@@ -55,6 +55,9 @@ func (s *Server) Accept(l net.Listener) {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
+			defer func() {
+				_ = conn.Close()
+			}()
 			return
 		}
 		go s.serveConn(conn)
@@ -71,6 +74,10 @@ func (s *Server) serveConn(conn net.Conn) {
 	// 校验建立options
 	option, err := s.readOption(conn)
 	if err != nil {
+		log.Println("readOption err, ", err)
+		defer func() {
+			_ = conn.Close()
+		}()
 		return
 	}
 
@@ -80,7 +87,7 @@ func (s *Server) serveConn(conn net.Conn) {
 		return
 	}
 	c := codecFunc(conn)
-	s.serveCodec(c)
+	s.serveCodec(c, option.HandleTimeout)
 }
 
 func (s *Server) readOption(conn net.Conn) (*Option, error) {
@@ -95,24 +102,30 @@ func (s *Server) readOption(conn net.Conn) (*Option, error) {
 	return options, nil
 }
 
-func (s *Server) serveCodec(c codec.Codec) {
+func (s *Server) serveCodec(c codec.Codec, timeout time.Duration) {
 	// 读取如果碰到多个request要并行，发送要串行
 	// readQueue只是等待所有req都完成
 	sendLock, readQueue := new(sync.Mutex), new(sync.WaitGroup)
+	log.Println("lock")
 	for {
 		// 读取req
 		readRequest, err := s.readRequest(c)
 		if err != nil {
 			if readRequest == nil {
+				// 读不到request，中断连接
 				log.Println("error: ", err)
-				continue
+				break
 			}
 			// 报错，返回
 			s.sendResponse(c, readRequest.Header, readRequest.Body, readQueue, sendLock)
 		}
 		readQueue.Add(1)
 		// 并发处理req，串行发送res
-		go s.handleRequest(readRequest, c, readRequest.Header, readRequest.Body, readQueue, sendLock)
+		go func() {
+			s.handleRequest(readRequest, c, readRequest.Header, readRequest.Body, readQueue, sendLock,
+				timeout)
+			log.Println("handle request completed")
+		}()
 	}
 	fmt.Println("end service")
 	readQueue.Wait()
@@ -138,6 +151,11 @@ func (s *Server) readRequest(c codec.Codec) (*request, error) {
 	service, _ := s.Load(names[0])
 	method := service.LoadMethod(names[1])
 
+	if method == nil {
+		log.Println(service.method, names)
+		return nil, errors.New("method is not found")
+	}
+
 	var argv = method.newArgv()
 	argvi := argv.Interface()
 	if argv.Type().Kind() != reflect.Ptr {
@@ -157,14 +175,33 @@ func (s *Server) readRequest(c codec.Codec) (*request, error) {
 	}, nil
 }
 
-func (s *Server) handleRequest(request *request, c codec.Codec, header *codec.Header, arg interface{}, queue *sync.WaitGroup, lock *sync.Mutex) {
+func (s *Server) handleRequest(request *request, c codec.Codec, header *codec.Header, arg interface{}, queue *sync.WaitGroup, lock *sync.Mutex, timeout time.Duration) {
 	defer queue.Done()
 	service, method := request.Service, request.Method
 
 	argV := reflect.ValueOf(arg)
 	replyV := method.newReplyv()
 
-	err := service.call(method, argV, replyV)
+	var errCh chan error
+	var err error
+
+	if timeout == 0 {
+		err = service.call(method, argV, replyV)
+		errCh <- err
+	} else {
+		go func() {
+			err = service.call(method, argV, replyV)
+			errCh <- err
+		}()
+	}
+	select {
+	case <-time.After(timeout):
+		header.Error = "handle timeout"
+		s.sendResponse(c, header, nil, queue, lock)
+		return
+	case err = <-errCh:
+	}
+
 	if err != nil {
 		header.Error = err.Error()
 		s.sendResponse(c, header, nil, queue, lock)

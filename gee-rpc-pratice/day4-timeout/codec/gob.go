@@ -24,6 +24,9 @@ func (g *GobCodec) Write(header *Header, body interface{}) (err error) {
 	if err != nil {
 		return err
 	}
+	if body == nil {
+		return nil
+	}
 	err = g.enc.Encode(body)
 	if err != nil {
 		return err

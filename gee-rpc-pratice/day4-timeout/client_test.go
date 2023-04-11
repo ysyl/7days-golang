@@ -10,7 +10,7 @@ import (
 
 type Bar int
 
-func (b Bar) Timeout(argv int, reply *int) error {
+func (b Bar) ConnectTimeout(argv int, reply *int) error {
 	time.Sleep(time.Second * 2)
 	return nil
 }
@@ -58,6 +58,7 @@ func TestClient_Call(t *testing.T) {
 	})
 	t.Run("server handle timeout", func(t *testing.T) {
 		client, _ := Dial("tcp", addr, &Option{
+			MagicNumber:   MagicNumber,
 			HandleTimeout: time.Second,
 		})
 		var reply int

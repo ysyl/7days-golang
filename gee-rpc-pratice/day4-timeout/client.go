@@ -178,12 +178,13 @@ func (c *Client) Call(ctx context.Context, method string, args interface{}, repl
 		return err
 	}
 
-	called := <-call.Done
-
-	if called.Error != nil {
-		return called.Error
+	select {
+	case <-call.Done:
+		return call.Error
+	case <-ctx.Done():
+		c.removeCall(call.Seq)
+		return errors.New("rpc client: call failed: " + ctx.Err().Error())
 	}
-	return nil
 }
 
 func (c *Client) send(method string, args interface{}, replyV interface{}) (*Call, error) {
@@ -236,7 +237,7 @@ func (c *Client) receive() {
 			err = c.cc.ReadBody(nil)
 		case header.Error != "":
 			call.Error = fmt.Errorf(header.Error)
-			err = c.cc.ReadBody(nil)
+			err = errors.New(header.Error)
 			call.done()
 		default:
 			err = c.cc.ReadBody(call.Reply)
