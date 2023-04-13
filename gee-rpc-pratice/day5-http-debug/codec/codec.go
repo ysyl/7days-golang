@@ -1,34 +1,99 @@
 package codec
 
 import (
-	"io"
+	"bufio"
+	"encoding/json"
+	"log"
+	"net"
 )
 
 type Header struct {
-	ServiceMethod string // format "Service.Method"
-	Seq           uint64 // sequence number chosen by client
+	ServiceMethod string
+	Seq           uint64
 	Error         string
 }
 
 type Codec interface {
-	io.Closer
-	ReadHeader(*Header) error
+	Write(header *Header, body interface{}) error
+	ReadHeader(header *Header) error
 	ReadBody(interface{}) error
-	Write(*Header, interface{}) error
+	Close() error
 }
 
-type NewCodecFunc func(io.ReadWriteCloser) Codec
+type NewCodecFunc func(conn net.Conn) Codec
 
-type Type string
+type Type int
 
 const (
-	GobType  Type = "application/gob"
-	JsonType Type = "application/json" // not implemented
+	GobType  Type = 0
+	JsonType Type = 1
 )
 
-var NewCodecFuncMap map[Type]NewCodecFunc
+var NewCodecFuncMap = map[Type]NewCodecFunc{
+	GobType:  NewGobCodec,
+	JsonType: NewJsonCodec,
+}
 
-func init() {
-	NewCodecFuncMap = make(map[Type]NewCodecFunc)
-	NewCodecFuncMap[GobType] = NewGobCodec
+type JsonCodec struct {
+	conn net.Conn
+	buf  *bufio.Writer
+	enc  *json.Encoder
+	dec  *json.Decoder
+}
+
+func (h *JsonCodec) Write(header *Header, body interface{}) error {
+	defer func() {
+		err := h.buf.Flush()
+		if err != nil {
+			_ = h.conn.Close()
+			return
+		}
+	}()
+	err := h.enc.Encode(header)
+	if err != nil {
+		log.Println("encode header error: ", err)
+		return err
+	}
+
+	if body == nil {
+		return nil
+	}
+	err = h.enc.Encode(body)
+	if err != nil {
+		log.Println("encode body error: ", err)
+		return err
+	}
+	return nil
+}
+
+func (h *JsonCodec) ReadHeader(header *Header) error {
+	err := h.dec.Decode(header)
+	if err != nil {
+		log.Println("decode header error:", err)
+		return err
+	}
+	return nil
+}
+
+func (h *JsonCodec) ReadBody(body interface{}) error {
+	err := h.dec.Decode(body)
+	if err != nil {
+		log.Println("decode header error:", err)
+		return err
+	}
+	return nil
+}
+
+func (h *JsonCodec) Close() error {
+	return h.Close()
+}
+
+func NewJsonCodec(conn net.Conn) Codec {
+	bufWriter := bufio.NewWriter(conn)
+	return &JsonCodec{
+		conn: conn,
+		buf:  bufWriter,
+		dec:  json.NewDecoder(conn),
+		enc:  json.NewEncoder(bufWriter),
+	}
 }

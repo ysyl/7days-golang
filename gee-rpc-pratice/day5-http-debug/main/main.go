@@ -30,7 +30,7 @@ func startServer(addrCh chan string) {
 
 func call(addrCh chan string) {
 	client, _ := geerpc.DialHTTP("tcp", <-addrCh)
-	defer func() { _ = client.Close() }()
+	//defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
 	// send request & receive response
